@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "PORT=3100 CORS_ORIGINS=http://localhost:4300 APP_URL=http://localhost:4300 npm --prefix server run dev"],
+      "port": 3100
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "API_URL=http://localhost:3100 npm --prefix client start -- --port 4300"],
+      "port": 4300
+    }
+  ]
+}

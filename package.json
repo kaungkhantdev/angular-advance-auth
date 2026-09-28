@@ -1,0 +1,11 @@
+{
+  "name": "advance-auth",
+  "private": true,
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix client install && npm --prefix server run seed:demo",
+    "dev:api": "npm --prefix server run dev",
+    "dev:web": "npm --prefix client start",
+    "test": "npm --prefix server test && npm --prefix client test -- --watch=false",
+    "typecheck": "npm --prefix server run typecheck"
+  }
+}
