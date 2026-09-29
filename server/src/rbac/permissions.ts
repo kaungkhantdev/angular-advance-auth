@@ -116,7 +116,11 @@ for (const p of PERMISSION_DEFS) {
 export const SUPER_ADMIN_ROLE = 'super_admin';
 export const DEFAULT_ROLE = 'user';
 
-/** System roles are seeded, cannot be deleted, and cannot be edited via the API. */
+/**
+ * System roles are created with these defaults on first boot and cannot be renamed or
+ * deleted. Admins may edit their permissions afterwards, except super_admin, which is
+ * always re-synced to every permission.
+ */
 export const SYSTEM_ROLES: Record<string, { description: string; permissions: readonly Permission[] }> = {
   [SUPER_ADMIN_ROLE]: {
     description: 'Unrestricted access. Can manage every role, including other super admins.',

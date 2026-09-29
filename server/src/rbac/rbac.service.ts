@@ -110,8 +110,8 @@ export function permissionCatalog() {
 }
 
 /**
- * Idempotently syncs the permission catalog, implications and system roles from
- * code into the DB. Runs at startup, so deploying new permissions needs no manual step.
+ * Idempotently syncs the permission catalog and implications from code into the DB,
+ * and creates any missing system roles. Runs at startup, so deploying new permissions needs no manual step.
  */
 export function syncRbacCatalog(): void {
   tx(() => {
@@ -132,18 +132,25 @@ export function syncRbacCatalog(): void {
     const addImplication = db.prepare('INSERT INTO permission_implications (permission, implies) VALUES (?, ?)');
     for (const p of PERMISSION_DEFS) for (const i of p.implies) addImplication.run(p.name, i);
 
+    // System roles get their code defaults only when first created; after that admins own
+    // their permissions and description. super_admin is the exception: it always holds
+    // every permission, including ones added in later deploys.
+    const add = db.prepare('INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)');
     for (const [name, def] of Object.entries(SYSTEM_ROLES)) {
       let role = db.prepare('SELECT id FROM roles WHERE name = ?').get(name) as { id: string } | undefined;
       if (!role) {
         role = { id: uuid() };
         db.prepare('INSERT INTO roles (id, name, description, is_system, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)')
           .run(role.id, name, def.description, now, now);
+        for (const p of def.permissions) add.run(role.id, p);
       } else {
-        db.prepare('UPDATE roles SET description = ?, is_system = 1 WHERE id = ?').run(def.description, role.id);
+        db.prepare('UPDATE roles SET is_system = 1 WHERE id = ?').run(role.id);
       }
-      db.prepare('DELETE FROM role_permissions WHERE role_id = ?').run(role.id);
-      const add = db.prepare('INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)');
-      for (const p of def.permissions) add.run(role.id, p);
+      if (name === SUPER_ADMIN_ROLE) {
+        db.prepare('UPDATE roles SET description = ? WHERE id = ?').run(def.description, role.id);
+        db.prepare('DELETE FROM role_permissions WHERE role_id = ?').run(role.id);
+        for (const p of def.permissions) add.run(role.id, p);
+      }
     }
   });
 }

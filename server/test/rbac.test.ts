@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { before, describe, it } from 'node:test';
 import { app, bearer, createUser, db, login, request, roleId } from './helpers.ts';
+const { rolePermissions, syncRbacCatalog } = await import('../src/rbac/rbac.service.ts');
 
 let superAdmin: { id: string; token: string };
 let admin: { id: string; token: string };
@@ -79,10 +80,33 @@ describe('privilege escalation guards', () => {
     assert.match(escalate.body.error.message, /articles:/);
   });
 
-  it('refuses to edit or delete system roles', async () => {
-    const res = await request(app).patch(`/api/roles/${roleId('user')}`).set(bearer(superAdmin.token))
-      .send({ permissions: ['users:delete'] });
-    assert.equal(res.status, 403);
+  it('keeps super_admin locked and system roles un-renamable and undeletable', async () => {
+    const lock = await request(app).patch(`/api/roles/${roleId('super_admin')}`).set(bearer(superAdmin.token))
+      .send({ permissions: ['users:read'] });
+    assert.equal(lock.status, 403);
+    const rename = await request(app).patch(`/api/roles/${roleId('user')}`).set(bearer(superAdmin.token))
+      .send({ name: 'member' });
+    assert.equal(rename.status, 403);
+    assert.equal((await request(app).delete(`/api/roles/${roleId('editor')}`).set(bearer(superAdmin.token))).status, 403);
+  });
+
+  it('lets system role permissions be edited, effective immediately', async () => {
+    const original = (await request(app).get(`/api/roles/${roleId('editor')}`).set(bearer(superAdmin.token))).body;
+    assert.equal(original.locked, false);
+
+    const res = await request(app).patch(`/api/roles/${roleId('editor')}`).set(bearer(superAdmin.token))
+      .send({ permissions: ['articles:read'] });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.effectivePermissions, ['articles:read']);
+    const create = await request(app).post('/api/articles').set(bearer(editor.token)).send({ title: 'Nope', body: 'x' });
+    assert.equal(create.status, 403);
+
+    syncRbacCatalog(); // as on the next server start
+    assert.deepEqual(rolePermissions(roleId('editor')), ['articles:read'], 'boot sync must not overwrite admin edits');
+
+    const restore = await request(app).patch(`/api/roles/${roleId('editor')}`).set(bearer(superAdmin.token))
+      .send({ permissions: original.permissions });
+    assert.equal(restore.status, 200);
   });
 
   it('prevents super admins from disabling themselves', async () => {

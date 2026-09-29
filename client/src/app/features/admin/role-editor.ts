@@ -27,15 +27,15 @@ const COARSE = ['read', 'write'] as const;
       <div class="page-header spread">
         <div>
           <h1>{{ id() ? form.getRawValue().name || 'Role' : 'New role' }}</h1>
-          @if (role()?.isSystem) {
-            <p class="muted">System role — defined on the server and read-only here.</p>
+          @if (role()?.locked) {
+            <p class="muted">Super admin always has every permission and can't be edited.</p>
           } @else if (!editable()) {
             <p class="muted">You have read-only access to roles.</p>
           }
         </div>
         @if (editable()) {
           <div class="row">
-            @if (id() && canDelete()) { <button type="button" class="btn btn-danger" (click)="remove()" [disabled]="busy()">Delete</button> }
+            @if (id() && canDelete() && !role()?.isSystem) { <button type="button" class="btn btn-danger" (click)="remove()" [disabled]="busy()">Delete</button> }
             <button class="btn btn-primary" [disabled]="busy()">Save role</button>
           </div>
         }
@@ -45,7 +45,11 @@ const COARSE = ['read', 'write'] as const;
         <div class="field">
           <label for="name">Name</label>
           <input id="name" type="text" formControlName="name" placeholder="e.g. support-agent" />
-          <span class="hint">Lowercase letters, digits, "_" and "-"</span>
+          @if (role()?.isSystem) {
+            <span class="hint">System role names are fixed</span>
+          } @else {
+            <span class="hint">Lowercase letters, digits, "_" and "-"</span>
+          }
         </div>
         <div class="field">
           <label for="desc">Description</label>
@@ -146,7 +150,7 @@ export class RoleEditor implements OnInit {
   protected readonly error = signal<string | null>(null);
 
   protected readonly editable = computed(() => {
-    if (this.role()?.isSystem) return false;
+    if (this.role()?.locked) return false;
     return this.id() ? this.auth.hasPermission('roles:update') : this.auth.hasPermission('roles:create');
   });
   protected readonly canDelete = computed(() => this.auth.hasPermission('roles:delete'));
@@ -181,6 +185,7 @@ export class RoleEditor implements OnInit {
           this.expanded.set(new Set(catalog.filter((g) => this.advancedDirectCount(g) > 0).map((g) => g.resource)));
         }
         if (!this.editable()) this.form.disable();
+        else if (role?.isSystem) this.form.controls.name.disable();
       },
       error: (e) => this.error.set(apiErrorMessage(e)),
     });
@@ -234,11 +239,14 @@ export class RoleEditor implements OnInit {
     if (!ensureValid(this.form)) return;
     // Drop permissions already granted by another selected one, so the stored role stays minimal.
     const permissions = [...this.selected()].filter((p) => !this.isRedundant(p));
-    const body = { ...this.form.getRawValue(), permissions };
+    const { name, description } = this.form.getRawValue();
+    const body = { name, description, permissions };
     const id = this.id();
     this.busy.set(true);
     this.error.set(null);
-    (id ? this.api.update(id, body) : this.api.create(body)).subscribe({
+    // System role names are fixed, so don't send one.
+    const update = this.role()?.isSystem ? { description, permissions } : body;
+    (id ? this.api.update(id, update) : this.api.create(body)).subscribe({
       next: () => void this.router.navigate(['/admin/roles']),
       error: (e) => { this.busy.set(false); this.error.set(apiErrorMessage(e)); },
     });

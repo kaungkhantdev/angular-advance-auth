@@ -82,8 +82,10 @@ User ──< user_roles >── Role ──< role_permissions >── Permission
     permission grants.
 
   The role editor renders its Read/Write matrix and advanced view entirely from that data.
-- **Roles are data.** System roles (`super_admin`, `admin`, `editor`, `user`) are read-only;
-  custom roles are built in the UI. Redundant grants (e.g. `read` when `write` is ticked)
+- **Roles are data.** System roles (`super_admin`, `admin`, `editor`, `user`) are created
+  with defaults on first boot. After that their permissions can be edited in the UI, but they
+  can't be renamed or deleted. `super_admin` stays locked to every permission. Custom roles
+  are built in the UI. Redundant grants (e.g. `read` when `write` is ticked)
   are pruned on save.
 - **Check permissions, not role names.** Routes use `requirePermission('users:update')`
   (always the most specific action) and deny by default.
@@ -100,7 +102,7 @@ User ──< user_roles >── Role ──< role_permissions >── Permission
 3. You cannot change your own roles, status or account through admin endpoints.
 4. You can only manage users whose permissions are a **subset of yours**, so an admin can't disable a super admin.
 5. The last active super admin cannot be removed or disabled.
-6. System roles cannot be edited or deleted through the API.
+6. `super_admin` cannot be edited, and system roles cannot be renamed or deleted.
 
 On the client, the `*hasPermission` directive, `requirePermissions()` guards and a
 permission-filtered nav are **UX only**. The server is the only authority.

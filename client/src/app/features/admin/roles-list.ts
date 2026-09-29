@@ -12,7 +12,7 @@ import { apiErrorMessage } from '../../core/http/errors';
     <div class="page-header spread">
       <div>
         <h1>Roles & permissions</h1>
-        <p class="muted">System roles are defined in code. Custom roles can be composed from the permission catalog.</p>
+        <p class="muted">System roles come with sensible defaults you can adjust. Custom roles can be composed from the permission catalog.</p>
       </div>
       <a *hasPermission="'roles:create'" routerLink="/admin/roles/new" class="btn btn-primary">New role</a>
     </div>

@@ -42,7 +42,7 @@ erDiagram
         TEXT id PK "UUID"
         TEXT name UK
         TEXT description
-        INTEGER is_system "1 = defined in code, read-only"
+        INTEGER is_system "1 = seeded, no rename or delete"
         INTEGER created_at
         INTEGER updated_at
     }
@@ -139,7 +139,7 @@ erDiagram
 
 | Domain | Tables | Notes |
 |---|---|---|
-| **RBAC** | `roles`, `permissions`, `role_permissions`, `user_roles`, `permission_implications` | `users` ↔ `roles` and `roles` ↔ `permissions` are many-to-many. `permission_implications` is a self-referencing many-to-many (`articles:write` → `articles:update:any` → `articles:update:own`), expanded transitively with a recursive CTE to compute effective permissions. |
+| **RBAC** | `roles`, `permissions`, `role_permissions`, `user_roles`, `permission_implications` | `users` ↔ `roles` and `roles` ↔ `permissions` are many-to-many. `permission_implications` is a self-referencing many-to-many (`articles:write` → `articles:update:any` → `articles:update:own`), expanded transitively with a recursive CTE to compute effective permissions. `permissions` and `permission_implications` are re-synced from code on every boot. System roles (`is_system = 1`) are created with defaults once, then their `role_permissions` are admin-editable, except `super_admin`, which is reset to every permission on boot. |
 | **Authentication** | `users`, `sessions`, `mfa_recovery_codes`, `one_time_tokens` | Every child row cascades on user delete. The refresh token is `<sessions.id>.<secret>`; only a SHA-256 of the secret is stored. |
 | **Audit** | `audit_logs` | Append-only. `actor_id` / `target_id` are intentionally **not** foreign keys, so history survives deletions. |
 | **Example resource** | `articles` | Demonstrates RBAC + ownership (`update:own` vs `update:any`). |

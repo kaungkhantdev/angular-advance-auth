@@ -22,7 +22,10 @@ export interface Role {
   id: string;
   name: string;
   description: string;
+  /** Seeded from code: cannot be renamed or deleted, but its permissions can be edited. */
   isSystem: boolean;
+  /** Fully read-only (super_admin always holds every permission). */
+  locked: boolean;
   userCount: number;
   /** Directly assigned permissions. */
   permissions: Permission[];
