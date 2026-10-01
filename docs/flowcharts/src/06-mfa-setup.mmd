@@ -1,0 +1,13 @@
+flowchart TD
+    A([User clicks Enable 2FA]) --> B["POST /api/auth/mfa/setup<br/>re-enter password (step-up confirmation)"]
+    B --> C{"Password correct?"}
+    C -- No --> R1(["400 Password is incorrect<br/>(audited)"])
+    C -- Yes --> D["Generate TOTP secret<br/>store encrypted in<br/>mfa_pending_secret_enc (AES-256-GCM)"]
+    D --> E(["Show QR code +<br/>manual secret"])
+    E --> F([User scans it and types<br/>the 6-digit code])
+    F --> F2["POST /api/auth/mfa/enable"] --> G{"Code valid for the<br/>pending secret?"}
+    G -- No --> R2(["400 Invalid code<br/>check device clock"])
+    G -- Yes --> H["Move pending secret to mfa_secret_enc<br/>set mfa_enabled_at"]
+    H --> I["Generate 10 recovery codes<br/>store only SHA-256 hashes"]
+    I --> J["Sign out all OTHER sessions<br/>(they logged in without 2FA)<br/>mark this session mfa_verified"]
+    J --> K(["Show recovery codes once<br/>audit auth.mfa_enabled"])

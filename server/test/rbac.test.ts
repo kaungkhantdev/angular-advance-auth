@@ -97,7 +97,7 @@ describe('privilege escalation guards', () => {
     const res = await request(app).patch(`/api/roles/${roleId('editor')}`).set(bearer(superAdmin.token))
       .send({ permissions: ['articles:read'] });
     assert.equal(res.status, 200);
-    assert.deepEqual(res.body.effectivePermissions, ['articles:read']);
+    assert.deepEqual(res.body.permissions, ['articles:read']);
     const create = await request(app).post('/api/articles').set(bearer(editor.token)).send({ title: 'Nope', body: 'x' });
     assert.equal(create.status, 403);
 
@@ -162,32 +162,24 @@ describe('resource ownership (articles)', () => {
   });
 });
 
-describe('read / write permissions', () => {
-  it('serves the catalog grouped by resource, with read/write and what each grants', async () => {
+describe('explicit permissions', () => {
+  it('serves the catalog grouped by resource, one entry per action', async () => {
     const res = await request(app).get('/api/roles/permissions').set(bearer(admin.token));
     assert.equal(res.status, 200);
     const articles = res.body.find((g: { resource: string }) => g.resource === 'articles');
     const actions = articles.permissions.map((p: { action: string }) => p.action);
-    assert.ok(actions.includes('read') && actions.includes('write'));
-    const write = articles.permissions.find((p: { action: string }) => p.action === 'write');
-    assert.ok(write.grants.includes('articles:update:any'));
-    assert.ok(write.grants.includes('articles:update:own'), 'implications are transitive');
+    assert.ok(actions.includes('read') && actions.includes('update:any'));
+    assert.ok(!actions.includes('write'), 'no bundle permissions');
   });
 
-  it('write implies the granular actions of the resource', async () => {
+  it('grants exactly the listed permissions, nothing more', async () => {
     const role = await request(app).post('/api/roles').set(bearer(superAdmin.token))
-      .send({ name: 'content-manager', permissions: ['articles:write'] });
+      .send({ name: 'fixer', permissions: ['articles:update:any'] });
     assert.equal(role.status, 201);
-    assert.ok(role.body.effectivePermissions.includes('articles:delete:any'));
-
-    const cm = await make('cm@example.com', ['content-manager']);
-    const me = await request(app).get('/api/auth/me').set(bearer(cm.token));
-    assert.ok(me.body.permissions.includes('articles:update:any'));
-    assert.ok(!me.body.permissions.includes('articles:publish'), 'write does not include publish');
-
-    const post = await request(app).post('/api/articles').set(bearer(bob.token)).send({ title: 'Bob', body: 'x' });
-    assert.equal((await request(app).patch(`/api/articles/${post.body.id}`).set(bearer(cm.token)).send({ title: 'Edited' })).status, 200);
-    assert.equal((await request(app).delete(`/api/articles/${post.body.id}`).set(bearer(cm.token))).status, 204);
+    const fixer = await make('fixer@example.com', ['fixer']);
+    const me = await request(app).get('/api/auth/me').set(bearer(fixer.token));
+    assert.deepEqual(me.body.permissions, ['articles:update:any']);
+    assert.equal((await request(app).get('/api/articles').set(bearer(fixer.token))).status, 403, 'update:any does not include read');
   });
 
   it('read does not allow writes', async () => {
@@ -197,24 +189,27 @@ describe('read / write permissions', () => {
     assert.equal((await request(app).patch(`/api/users/${bob.id}`).set(bearer(auditor.token)).send({ name: 'X' })).status, 403);
   });
 
-  it('requires holding everything a permission implies before delegating it', async () => {
-    // editor-lead can manage roles but only holds part of articles:write.
+  it('only lets you put permissions you hold into a role', async () => {
     await request(app).post('/api/roles').set(bearer(superAdmin.token))
-      .send({ name: 'editor-lead', permissions: ['roles:write', 'articles:update:any', 'articles:create'] });
+      .send({ name: 'editor-lead', permissions: ['roles:read', 'roles:create', 'articles:read', 'articles:create'] });
     const lead = await make('lead@example.com', ['editor-lead']);
-    const res = await request(app).post('/api/roles').set(bearer(lead.token)).send({ name: 'too-much', permissions: ['articles:write'] });
+    const ok = await request(app).post('/api/roles').set(bearer(lead.token)).send({ name: 'writer', permissions: ['articles:create'] });
+    assert.equal(ok.status, 201);
+    const res = await request(app).post('/api/roles').set(bearer(lead.token)).send({ name: 'too-much', permissions: ['articles:delete:any'] });
     assert.equal(res.status, 403);
     assert.match(res.body.error.message, /articles:delete:any/);
   });
 
-  it('resolves implications from the database at request time', async () => {
-    const erin = await make('erin@example.com', ['user']);
-    assert.equal((await request(app).get('/api/audit').set(bearer(erin.token))).status, 403);
-    db.prepare("INSERT INTO permission_implications (permission, implies) VALUES ('articles:read', 'audit:read')").run();
-    try {
-      assert.equal((await request(app).get('/api/audit').set(bearer(erin.token))).status, 200);
-    } finally {
-      db.prepare("DELETE FROM permission_implications WHERE permission = 'articles:read' AND implies = 'audit:read'").run();
-    }
+  it('gives permissions a surrogate id, keeps name unique, and links roles by permission_id', () => {
+    const cols = db.prepare('PRAGMA table_info(permissions)').all() as { name: string; pk: number }[];
+    assert.deepEqual(cols.filter((c) => c.pk).map((c) => c.name), ['id']);
+    assert.throws(() => db.prepare("INSERT INTO permissions (name, description) VALUES ('articles:read', 'dup')").run(), /UNIQUE/);
+    const fks = db.prepare('PRAGMA foreign_key_list(role_permissions)').all() as { table: string; from: string; to: string }[];
+    assert.ok(fks.some((f) => f.table === 'permissions' && f.from === 'permission_id' && f.to === 'id'));
+  });
+
+  it('has no permission_implications table', () => {
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'permission_implications'").get();
+    assert.equal(table, undefined);
   });
 });

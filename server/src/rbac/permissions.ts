@@ -1,11 +1,9 @@
 /**
- * Permission catalog — the default definitions synced into the database at startup.
+ * Permission catalog — the definitions synced into the database at startup.
  *
- * Every resource exposes coarse `read` / `write` permissions plus optional
- * fine-grained actions. `write` *implies* the resource's mutating actions (and
- * `read`), so a role can be granted simple Read/Write access or tuned precisely.
- * Implications are stored in the DB and expanded server-side; clients receive
- * the catalog and each user's effective permissions from the API and never
+ * Each permission is one action on one resource (`articles:publish`). Permissions
+ * don't include each other: a role grants exactly the permissions it lists.
+ * Clients receive the catalog and each user's permissions from the API and never
  * hard-code them.
  *
  * Route handlers always check permissions, never role names, so roles can be
@@ -13,8 +11,6 @@
  */
 interface ActionDef {
   description: string;
-  /** Other permissions (full names) this one grants. Resolved transitively. */
-  implies?: readonly string[];
 }
 
 interface ResourceDef {
@@ -27,29 +23,26 @@ export const RESOURCES = {
     label: 'Users',
     actions: {
       read: { description: 'View user accounts' },
-      write: { description: 'Create, edit and delete user accounts', implies: ['users:read', 'users:create', 'users:update', 'users:delete'] },
-      create: { description: 'Invite new users', implies: ['users:read'] },
-      update: { description: 'Edit, lock/unlock and deactivate users', implies: ['users:read'] },
-      delete: { description: 'Delete user accounts', implies: ['users:read'] },
-      'assign-roles': { description: 'Grant or revoke roles on users', implies: ['users:read'] },
+      create: { description: 'Invite new users' },
+      update: { description: 'Edit, lock/unlock and deactivate users' },
+      delete: { description: 'Delete user accounts' },
+      'assign-roles': { description: 'Grant or revoke roles on users' },
     },
   },
   roles: {
     label: 'Roles',
     actions: {
       read: { description: 'View roles and their permissions' },
-      write: { description: 'Create, edit and delete custom roles', implies: ['roles:read', 'roles:create', 'roles:update', 'roles:delete'] },
-      create: { description: 'Create custom roles', implies: ['roles:read'] },
-      update: { description: 'Edit custom roles and their permissions', implies: ['roles:read'] },
-      delete: { description: 'Delete custom roles', implies: ['roles:read'] },
+      create: { description: 'Create custom roles' },
+      update: { description: 'Edit roles and their permissions' },
+      delete: { description: 'Delete custom roles' },
     },
   },
   sessions: {
     label: 'Sessions',
     actions: {
       read: { description: "View any user's active sessions" },
-      write: { description: "Sign out any user's sessions", implies: ['sessions:read', 'sessions:revoke'] },
-      revoke: { description: "Sign out any user's sessions", implies: ['sessions:read'] },
+      revoke: { description: "Sign out any user's sessions" },
     },
   },
   audit: {
@@ -62,17 +55,13 @@ export const RESOURCES = {
     label: 'Articles',
     actions: {
       read: { description: 'Read published articles and own drafts' },
-      write: {
-        description: 'Create, edit and delete any article',
-        implies: ['articles:read', 'articles:create', 'articles:update:any', 'articles:delete:any'],
-      },
-      'read-drafts': { description: 'Read unpublished drafts of any author', implies: ['articles:read'] },
-      create: { description: 'Write articles', implies: ['articles:read'] },
-      'update:own': { description: 'Edit own articles', implies: ['articles:read'] },
-      'update:any': { description: 'Edit any article', implies: ['articles:update:own', 'articles:read-drafts'] },
-      'delete:own': { description: 'Delete own articles', implies: ['articles:read'] },
-      'delete:any': { description: 'Delete any article', implies: ['articles:delete:own', 'articles:read-drafts'] },
-      publish: { description: 'Publish / unpublish articles', implies: ['articles:read-drafts'] },
+      'read-drafts': { description: 'Read unpublished drafts of any author' },
+      create: { description: 'Write articles' },
+      'update:own': { description: 'Edit own articles' },
+      'update:any': { description: 'Edit any article' },
+      'delete:own': { description: 'Delete own articles' },
+      'delete:any': { description: 'Delete any article' },
+      publish: { description: 'Publish / unpublish articles' },
     },
   },
 } as const satisfies Record<string, ResourceDef>;
@@ -88,7 +77,6 @@ export interface PermissionDef {
   resource: string;
   action: string;
   description: string;
-  implies: Permission[];
 }
 
 export const PERMISSION_DEFS: PermissionDef[] = Object.entries(RESOURCES).flatMap(([resource, def]) =>
@@ -97,7 +85,6 @@ export const PERMISSION_DEFS: PermissionDef[] = Object.entries(RESOURCES).flatMa
     resource,
     action,
     description: a.description,
-    implies: (a.implies ?? []) as Permission[],
   })),
 );
 
@@ -108,10 +95,6 @@ export function isPermission(value: string): value is Permission {
   return KNOWN.has(value);
 }
 
-// Fail fast on typos in `implies` — a dangling implication would silently grant nothing.
-for (const p of PERMISSION_DEFS) {
-  for (const i of p.implies) if (!KNOWN.has(i)) throw new Error(`${p.name} implies unknown permission ${i}`);
-}
 
 export const SUPER_ADMIN_ROLE = 'super_admin';
 export const DEFAULT_ROLE = 'user';
@@ -129,16 +112,20 @@ export const SYSTEM_ROLES: Record<string, { description: string; permissions: re
   admin: {
     description: 'Manages users, sessions and content. Can view but not change role definitions.',
     permissions: [
-      'users:write', 'users:assign-roles',
+      'users:read', 'users:create', 'users:update', 'users:delete', 'users:assign-roles',
       'roles:read',
-      'sessions:write',
+      'sessions:read', 'sessions:revoke',
       'audit:read',
-      'articles:write', 'articles:publish',
+      'articles:read', 'articles:read-drafts', 'articles:create', 'articles:update:own', 'articles:update:any',
+      'articles:delete:own', 'articles:delete:any', 'articles:publish',
     ],
   },
   editor: {
     description: 'Reviews, edits and publishes content from all authors.',
-    permissions: ['articles:create', 'articles:update:any', 'articles:delete:own', 'articles:publish'],
+    permissions: [
+      'articles:read', 'articles:read-drafts', 'articles:create', 'articles:update:own', 'articles:update:any',
+      'articles:delete:own', 'articles:publish',
+    ],
   },
   [DEFAULT_ROLE]: {
     description: 'Default role for self-registered accounts.',

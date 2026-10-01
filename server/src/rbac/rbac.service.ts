@@ -6,31 +6,24 @@ import { ALL_PERMISSIONS, isPermission, PERMISSION_DEFS, RESOURCES, SUPER_ADMIN_
 export interface Principal {
   userId: string;
   roles: string[];
-  /** Effective permissions: everything granted by the user's roles, with implications expanded. */
+  /** Every permission granted by any of the user's roles. */
   permissions: Set<Permission>;
 }
-
-/** Transitively follows permission_implications from a seed set (write ⇒ create ⇒ read …). */
-const EXPAND = (seed: string) => `
-  WITH RECURSIVE eff(p) AS (
-    ${seed}
-    UNION
-    SELECT pi.implies FROM permission_implications pi JOIN eff ON pi.permission = eff.p
-  )
-  SELECT p FROM eff`;
 
 const rolesStmt = db.prepare(`
   SELECT r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = ? ORDER BY r.name
 `);
-const userPermsStmt = db.prepare(EXPAND(`
-  SELECT rp.permission FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id WHERE ur.user_id = ?`));
-const rolePermsStmt = db.prepare(EXPAND('SELECT permission FROM role_permissions WHERE role_id = ?'));
+const userPermsStmt = db.prepare(`
+  SELECT DISTINCT p.name AS permission FROM user_roles ur
+  JOIN role_permissions rp ON rp.role_id = ur.role_id
+  JOIN permissions p ON p.id = rp.permission_id
+  WHERE ur.user_id = ?`);
 
-const toPermissions = (rows: unknown[]) => (rows as { p: string }[]).map((r) => r.p).filter(isPermission);
+const toPermissions = (rows: unknown[]) => (rows as { permission: string }[]).map((r) => r.permission).filter(isPermission);
 
 /**
  * Resolved from the database on every request rather than baked into the JWT, so
- * role and implication changes take effect immediately (no stale-token window).
+ * role changes take effect immediately (no stale-token window).
  */
 export function loadPrincipal(userId: string): Principal {
   const roles = (rolesStmt.all(userId) as { name: string }[]).map((r) => r.name);
@@ -45,35 +38,23 @@ export function isSuperAdmin(principal: Principal): boolean {
   return principal.roles.includes(SUPER_ADMIN_ROLE);
 }
 
-/** Permissions assigned directly to the role. */
+/** The permissions the role grants. */
 export function rolePermissions(roleId: string): Permission[] {
-  return (db.prepare('SELECT permission FROM role_permissions WHERE role_id = ?').all(roleId) as { permission: string }[])
-    .map((r) => r.permission)
-    .filter(isPermission);
-}
-
-/** Everything the role actually grants, implications included. */
-export function roleEffectivePermissions(roleId: string): Permission[] {
-  return toPermissions(rolePermsStmt.all(roleId)).sort();
-}
-
-export function expandPermissions(permissions: Iterable<Permission>): Set<Permission> {
-  const seed = [...new Set(permissions)];
-  if (seed.length === 0) return new Set();
-  const rows = db.prepare(EXPAND(seed.map(() => 'SELECT ?').join(' UNION '))).all(...seed);
-  return new Set(toPermissions(rows));
+  return toPermissions(db.prepare(`
+    SELECT p.name AS permission FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id WHERE rp.role_id = ?
+  `).all(roleId));
 }
 
 /**
  * Anti privilege-escalation rule: you can only hand out (or define a role with)
- * permissions you effectively hold yourself — including everything they imply.
+ * permissions you hold yourself.
  * The super_admin role can only be granted by a super admin.
  */
 export function assertCanDelegate(actor: Principal, permissions: Iterable<Permission>, roleName?: string): void {
   if (roleName === SUPER_ADMIN_ROLE && !isSuperAdmin(actor)) {
     throw forbidden('Only a super admin can grant or revoke the super_admin role');
   }
-  const missing = [...expandPermissions(permissions)].filter((p) => !actor.permissions.has(p));
+  const missing = [...new Set(permissions)].filter((p) => !actor.permissions.has(p));
   if (missing.length > 0) {
     throw forbidden(`You cannot delegate permissions you do not hold: ${missing.sort().join(', ')}`);
   }
@@ -81,24 +62,14 @@ export function assertCanDelegate(actor: Principal, permissions: Iterable<Permis
 
 /** The permission catalog as stored in the database, grouped by resource. */
 export function permissionCatalog() {
-  const rows = db.prepare(`
-    SELECT p.name, p.resource, p.action, p.description,
-           (SELECT GROUP_CONCAT(implies) FROM permission_implications WHERE permission = p.name) AS implies
-    FROM permissions p ORDER BY p.rowid
-  `).all() as { name: string; resource: string; action: string; description: string; implies: string | null }[];
+  const rows = db.prepare('SELECT name, resource, action, description FROM permissions ORDER BY id')
+    .all() as { name: string; resource: string; action: string; description: string }[];
 
   const labels: Record<string, string> = Object.fromEntries(Object.entries(RESOURCES).map(([k, v]) => [k, v.label]));
   const groups = new Map<string, { resource: string; label: string; permissions: unknown[] }>();
   for (const r of rows) {
     const group = groups.get(r.resource) ?? { resource: r.resource, label: labels[r.resource] ?? r.resource, permissions: [] };
-    group.permissions.push({
-      name: r.name,
-      action: r.action,
-      description: r.description,
-      implies: r.implies ? r.implies.split(',').sort() : [],
-      // Everything this permission grants, transitively — lets UIs show "included via write".
-      grants: [...expandPermissions([r.name as Permission])].filter((p) => p !== r.name).sort(),
-    });
+    group.permissions.push({ name: r.name, action: r.action, description: r.description });
     groups.set(r.resource, group);
   }
   // Present in definition order (not DB insertion order); unknown resources last.
@@ -110,8 +81,8 @@ export function permissionCatalog() {
 }
 
 /**
- * Idempotently syncs the permission catalog and implications from code into the DB,
- * and creates any missing system roles. Runs at startup, so deploying new permissions needs no manual step.
+ * Idempotently syncs the permission catalog from code into the DB and creates any
+ * missing system roles. Runs at startup, so deploying new permissions needs no manual step.
  */
 export function syncRbacCatalog(): void {
   tx(() => {
@@ -122,20 +93,16 @@ export function syncRbacCatalog(): void {
     `);
     for (const p of PERMISSION_DEFS) upsertPerm.run(p.name, p.description, p.resource, p.action);
 
-    // Remove permissions that no longer exist in code (cascades to role_permissions and implications).
+    // Remove permissions that no longer exist in code (cascades to role_permissions).
     const known = new Set<string>(ALL_PERMISSIONS);
     for (const { name } of db.prepare('SELECT name FROM permissions').all() as { name: string }[]) {
       if (!known.has(name)) db.prepare('DELETE FROM permissions WHERE name = ?').run(name);
     }
 
-    db.exec('DELETE FROM permission_implications');
-    const addImplication = db.prepare('INSERT INTO permission_implications (permission, implies) VALUES (?, ?)');
-    for (const p of PERMISSION_DEFS) for (const i of p.implies) addImplication.run(p.name, i);
-
     // System roles get their code defaults only when first created; after that admins own
     // their permissions and description. super_admin is the exception: it always holds
     // every permission, including ones added in later deploys.
-    const add = db.prepare('INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)');
+    const add = db.prepare('INSERT INTO role_permissions (role_id, permission_id) SELECT ?, id FROM permissions WHERE name = ?');
     for (const [name, def] of Object.entries(SYSTEM_ROLES)) {
       let role = db.prepare('SELECT id FROM roles WHERE name = ?').get(name) as { id: string } | undefined;
       if (!role) {

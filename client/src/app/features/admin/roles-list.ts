@@ -27,7 +27,7 @@ import { apiErrorMessage } from '../../core/http/errors';
           </div>
           <p class="small muted">{{ r.description || 'No description' }}</p>
           <div class="row small">
-            <span><strong>{{ r.effectivePermissions.length }}</strong> permissions</span>
+            <span><strong>{{ r.permissions.length }}</strong> permissions</span>
             <span class="muted">·</span>
             <span><strong>{{ r.userCount }}</strong> users</span>
           </div>

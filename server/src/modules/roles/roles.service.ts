@@ -2,7 +2,7 @@ import { db, tx } from '../../db/database.ts';
 import { uuid } from '../../lib/crypto.ts';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.ts';
 import { SUPER_ADMIN_ROLE, type Permission } from '../../rbac/permissions.ts';
-import { assertCanDelegate, permissionCatalog, roleEffectivePermissions, rolePermissions, type Principal } from '../../rbac/rbac.service.ts';
+import { assertCanDelegate, permissionCatalog, rolePermissions, type Principal } from '../../rbac/rbac.service.ts';
 import { audit, type AuditContext } from '../audit/audit.service.ts';
 
 interface RoleRow {
@@ -25,10 +25,7 @@ function toDto(r: RoleRow) {
     /** Fully read-only (super_admin always holds every permission). */
     locked: r.is_system === 1 && r.name === SUPER_ADMIN_ROLE,
     userCount: r.user_count,
-    /** Directly assigned permissions (what the role editor edits). */
     permissions: rolePermissions(r.id).sort(),
-    /** Everything the role grants once implications (e.g. write ⇒ update) are expanded. */
-    effectivePermissions: roleEffectivePermissions(r.id),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -114,6 +111,6 @@ export function deleteRole(actor: Principal, id: string, ctx: AuditContext): voi
 function setPermissions(roleId: string, permissions: Permission[]): void {
   if (new Set(permissions).size !== permissions.length) throw badRequest('Duplicate permissions');
   db.prepare('DELETE FROM role_permissions WHERE role_id = ?').run(roleId);
-  const add = db.prepare('INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)');
+  const add = db.prepare('INSERT INTO role_permissions (role_id, permission_id) SELECT ?, id FROM permissions WHERE name = ?');
   for (const p of permissions) add.run(roleId, p);
 }

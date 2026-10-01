@@ -131,4 +131,45 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (permission, implies)
   );
   `,
+
+  /* 003 — drop permission implications: roles now list every permission explicitly.
+     Each role first receives the permissions it used to get through implications, so
+     nobody loses access. */ `
+  WITH RECURSIVE eff(role_id, permission) AS (
+    SELECT role_id, permission FROM role_permissions
+    UNION
+    SELECT eff.role_id, pi.implies FROM permission_implications pi JOIN eff ON pi.permission = eff.permission
+  )
+  INSERT OR IGNORE INTO role_permissions (role_id, permission) SELECT role_id, permission FROM eff;
+
+  DROP TABLE permission_implications;
+  `,
+
+  /* 004 — surrogate key for permissions: permissions.id is the primary key and name stays
+     UNIQUE (it is what code checks). role_permissions now references permission_id.
+     SQLite can't change a primary key in place, so both tables are rebuilt. */ `
+  ALTER TABLE permissions RENAME TO permissions_old;
+
+  CREATE TABLE permissions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    resource    TEXT NOT NULL DEFAULT '',
+    action      TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL
+  );
+  INSERT INTO permissions (name, resource, action, description)
+    SELECT name, resource, action, description FROM permissions_old ORDER BY rowid;
+
+  CREATE TABLE role_permissions_new (
+    role_id       TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+    PRIMARY KEY (role_id, permission_id)
+  );
+  INSERT INTO role_permissions_new (role_id, permission_id)
+    SELECT rp.role_id, p.id FROM role_permissions rp JOIN permissions p ON p.name = rp.permission;
+
+  DROP TABLE role_permissions;
+  DROP TABLE permissions_old;
+  ALTER TABLE role_permissions_new RENAME TO role_permissions;
+  `,
 ];

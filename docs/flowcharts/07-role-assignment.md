@@ -1,0 +1,29 @@
+# Assigning roles to a user
+
+The checks that run when an admin changes someone's roles. These stop admins from
+giving out more access than they have. Code: [`users.service.ts`](../../server/src/modules/users/users.service.ts) (`setUserRoles`), [`rbac.service.ts`](../../server/src/rbac/rbac.service.ts) (`assertCanDelegate`).
+
+![Assigning roles to a user](images/07-role-assignment.png)
+
+```mermaid
+flowchart TD
+    A([Admin saves roles for a user]) --> B["PUT /api/users/:id/roles"]
+    B --> C{"Has users:assign-roles?"}
+    C -- No --> R0(["403 Forbidden"])
+    C -- Yes --> D{"Changing their<br/>own roles?"}
+    D -- Yes --> R1(["403 Cannot change your own roles"])
+    D -- No --> E{"Target has any permission<br/>the admin lacks?<br/>(skipped for super admins)"}
+    E -- Yes --> R2(["403 User has more<br/>privileges than you"])
+    E -- No --> F{"At least one role<br/>selected?"}
+    F -- No --> R3(["400 A user must have at least one role"])
+    F -- Yes --> G["Work out added and removed roles"]
+    G --> H{"For every added or removed role:<br/>admin holds all its permissions?"}
+    H -- No --> R4(["403 Cannot delegate<br/>permissions you don't hold"])
+    H -- Yes --> I{"Granting or revoking super_admin<br/>by a non-super-admin?"}
+    I -- Yes --> R5(["403 Only a super admin can"])
+    I -- No --> J{"Removing super_admin from<br/>the last active super admin?"}
+    J -- Yes --> R6(["409 Last super admin<br/>cannot be removed"])
+    J -- No --> K["Delete removed rows, insert added rows<br/>in user_roles (granted_by = admin)"]
+    K --> L["Audit users.roles_changed<br/>added / removed"]
+    L --> OK(["200 OK, applies on the<br/>user's next request"])
+```

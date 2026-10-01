@@ -117,7 +117,7 @@ export class UserDetail implements OnInit {
   protected readonly manageable = computed(() => {
     if (this.auth.user()?.roles.includes('super_admin')) return true;
     const targetRoles = new Set(this.user()?.roles ?? []);
-    return this.roles().filter((r) => targetRoles.has(r.name)).every((r) => this.auth.hasPermission(...r.effectivePermissions));
+    return this.roles().filter((r) => targetRoles.has(r.name)).every((r) => this.auth.hasPermission(...r.permissions));
   });
   protected readonly readOnly = computed(() => this.isSelf() || !this.manageable());
   protected readonly rolesDirty = computed(() => {
