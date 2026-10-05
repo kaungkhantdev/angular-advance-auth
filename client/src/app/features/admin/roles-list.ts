@@ -12,7 +12,7 @@ import { apiErrorMessage } from '../../core/http/errors';
     <div class="page-header spread">
       <div>
         <h1>Roles & permissions</h1>
-        <p class="muted">System roles are defined in code. Custom roles can be composed from the permission catalog.</p>
+        <p class="muted">System roles come with sensible defaults you can adjust. Custom roles can be composed from the permission catalog.</p>
       </div>
       <a *hasPermission="'roles:create'" routerLink="/admin/roles/new" class="btn btn-primary">New role</a>
     </div>
@@ -27,7 +27,7 @@ import { apiErrorMessage } from '../../core/http/errors';
           </div>
           <p class="small muted">{{ r.description || 'No description' }}</p>
           <div class="row small">
-            <span><strong>{{ r.effectivePermissions.length }}</strong> permissions</span>
+            <span><strong>{{ r.permissions.length }}</strong> permissions</span>
             <span class="muted">·</span>
             <span><strong>{{ r.userCount }}</strong> users</span>
           </div>

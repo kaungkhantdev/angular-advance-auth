@@ -65,29 +65,26 @@ Tests: `npm test` (32 API integration tests + client unit tests).
 
 ```
 User ──< user_roles >── Role ──< role_permissions >── Permission (resource:action)
-                                                         │
-                                          permission_implications (write ⇒ create/update/delete ⇒ read)
 ```
 
-- **Read / Write per resource.** Every resource (`users`, `roles`, `sessions`, `audit`,
-  `articles`) exposes `read` and, where it makes sense, `write`, plus optional fine-grained
-  actions (`articles:update:own`, `articles:publish`, …). `write` implies the resource's
-  create/update/delete actions and `read`. Implications are stored in the DB and resolved
-  **transitively on the server** with a recursive query.
+- **One permission per action.** Every resource (`users`, `roles`, `sessions`, `audit`,
+  `articles`) has one permission per action (`articles:read`, `articles:update:own`,
+  `articles:publish`, …). Permissions don't include each other: a role grants exactly the
+  permissions it lists, and a user has every permission from all of their roles.
 - **Server-defined, served dynamically.** Permissions are defined on the server
   (`server/src/rbac/permissions.ts`) and synced to the DB at startup. The client has **no
   hard-coded permission list**:
-  - `/api/auth/me` returns the user's *effective* permissions (implications expanded);
-  - `/api/roles/permissions` returns the catalog grouped by resource, with what each
-    permission grants.
+  - `/api/auth/me` returns the user's permissions;
+  - `/api/roles/permissions` returns the catalog grouped by resource.
 
-  The role editor renders its Read/Write matrix and advanced view entirely from that data.
-- **Roles are data.** System roles (`super_admin`, `admin`, `editor`, `user`) are read-only;
-  custom roles are built in the UI. Redundant grants (e.g. `read` when `write` is ticked)
-  are pruned on save.
+  The role editor renders its checklist entirely from that data.
+- **Roles are data.** System roles (`super_admin`, `admin`, `editor`, `user`) are created
+  with defaults on first boot. After that their permissions can be edited in the UI, but they
+  can't be renamed or deleted. `super_admin` stays locked to every permission. Custom roles
+  are built in the UI.
 - **Check permissions, not role names.** Routes use `requirePermission('users:update')`
   (always the most specific action) and deny by default.
-- **Resolved per request.** Role or implication changes apply on the user's next request,
+- **Resolved per request.** Role changes apply on the user's next request,
   with no stale JWT claims.
 - **Resource-level policies.** RBAC is combined with ownership in pure policy functions
   (`article.policy.ts`): `articles:update:own` vs `articles:update:any`. Unreadable drafts
@@ -95,12 +92,12 @@ User ──< user_roles >── Role ──< role_permissions >── Permission
   `can` flags so the UI never duplicates business rules.
 
 **Anti-privilege-escalation rules** (all enforced server-side and tested):
-1. You can only grant or revoke a role, or define a role, using permissions **you hold yourself**, including everything they imply.
+1. You can only grant or revoke a role, or define a role, using permissions **you hold yourself**.
 2. Only a super admin can grant or revoke `super_admin`.
 3. You cannot change your own roles, status or account through admin endpoints.
 4. You can only manage users whose permissions are a **subset of yours**, so an admin can't disable a super admin.
 5. The last active super admin cannot be removed or disabled.
-6. System roles cannot be edited or deleted through the API.
+6. `super_admin` cannot be edited, and system roles cannot be renamed or deleted.
 
 On the client, the `*hasPermission` directive, `requirePermissions()` guards and a
 permission-filtered nav are **UX only**. The server is the only authority.

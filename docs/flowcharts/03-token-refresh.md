@@ -1,0 +1,35 @@
+# Token refresh (rotation and reuse detection)
+
+How the refresh cookie is exchanged for a new access token. Every refresh rotates
+the secret; replaying an old secret signals theft and kills the session.
+Code: [`session.service.ts`](../../server/src/modules/auth/session.service.ts) (`rotateSession`), [`auth.service.ts`](../../client/src/app/core/auth/auth.service.ts) (client).
+
+![Token refresh (rotation and reuse detection)](images/03-token-refresh.png)
+
+```mermaid
+flowchart TD
+    A([Trigger]) --> A1["80% of access token lifetime passed<br/>(proactive timer)"]
+    A --> A2["An API call got 401 TOKEN_EXPIRED"]
+    A --> A3["Page load: restore session"]
+    A1 --> B
+    A2 --> B
+    A3 --> B
+    B["Client: single-flight refresh<br/>(parallel callers share one request)"] --> C["POST /api/auth/refresh<br/>cookie rt = sessionId.secret<br/>+ CSRF header"]
+    C --> D{"Session row exists<br/>and not revoked?"}
+    D -- No --> F1(["401 INVALID_REFRESH"])
+    D -- Yes --> E{"Past expires_at (7 days sliding)<br/>or absolute_expires_at (30 days)?"}
+    E -- Yes --> E1["Revoke session: expired"] --> F2(["401 SESSION_EXPIRED"])
+    E -- No --> G{"SHA-256(secret) =<br/>token_hash?"}
+    G -- No --> H{"Matches prev_token_hash<br/>and rotated in the last 15 s?"}
+    H -- Yes --> F3(["401 REFRESH_RACE<br/>a parallel tab already rotated it, retry"])
+    H -- No --> I["Old secret replayed = token theft<br/>revoke session: refresh_token_reuse<br/>audit auth.refresh_token_reuse"]
+    I --> F4(["401 REFRESH_REUSE"])
+    G -- Yes --> J{"User still active?"}
+    J -- No --> J1["Revoke session"] --> F5(["401 ACCOUNT_DISABLED"])
+    J -- Yes --> K["Rotate: new random secret<br/>prev_token_hash = old hash<br/>extend expires_at (capped at 30 days)"]
+    K --> L(["200 new access JWT<br/>+ new refresh cookie"])
+    F1 --> Z(["Client signs the user out"])
+    F2 --> Z
+    F4 --> Z
+    F5 --> Z
+```

@@ -1,8 +1,8 @@
 import { db, tx } from '../../db/database.ts';
 import { uuid } from '../../lib/crypto.ts';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.ts';
-import type { Permission } from '../../rbac/permissions.ts';
-import { assertCanDelegate, permissionCatalog, roleEffectivePermissions, rolePermissions, type Principal } from '../../rbac/rbac.service.ts';
+import { SUPER_ADMIN_ROLE, type Permission } from '../../rbac/permissions.ts';
+import { assertCanDelegate, permissionCatalog, rolePermissions, type Principal } from '../../rbac/rbac.service.ts';
 import { audit, type AuditContext } from '../audit/audit.service.ts';
 
 interface RoleRow {
@@ -20,12 +20,12 @@ function toDto(r: RoleRow) {
     id: r.id,
     name: r.name,
     description: r.description,
+    /** Seeded from code: cannot be renamed or deleted, but its permissions can be edited. */
     isSystem: r.is_system === 1,
+    /** Fully read-only (super_admin always holds every permission). */
+    locked: r.is_system === 1 && r.name === SUPER_ADMIN_ROLE,
     userCount: r.user_count,
-    /** Directly assigned permissions (what the role editor edits). */
     permissions: rolePermissions(r.id).sort(),
-    /** Everything the role grants once implications (e.g. write ⇒ update) are expanded. */
-    effectivePermissions: roleEffectivePermissions(r.id),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -49,8 +49,8 @@ export function getRole(id: string) {
 }
 
 function assertEditable(role: ReturnType<typeof getRole>): void {
-  // System roles are defined in code (see rbac/permissions.ts) and re-synced on boot.
-  if (role.isSystem) throw forbidden('System roles are managed in code and cannot be modified');
+  // super_admin is re-synced to every permission on boot (see syncRbacCatalog).
+  if (role.locked) throw forbidden('The super admin role always has every permission and cannot be modified');
 }
 
 export function createRole(actor: Principal, input: { name: string; description: string; permissions: Permission[] }, ctx: AuditContext) {
@@ -73,6 +73,8 @@ export function updateRole(
 ) {
   const role = getRole(id);
   assertEditable(role);
+  // Code looks system roles up by name (e.g. the default role for new sign-ups).
+  if (role.isSystem && input.name && input.name !== role.name) throw forbidden('System roles cannot be renamed');
   if (input.name && input.name !== role.name && db.prepare('SELECT 1 FROM roles WHERE name = ?').get(input.name)) {
     throw conflict('A role with this name already exists');
   }
@@ -99,7 +101,7 @@ export function updateRole(
 
 export function deleteRole(actor: Principal, id: string, ctx: AuditContext): void {
   const role = getRole(id);
-  assertEditable(role);
+  if (role.isSystem) throw forbidden('System roles cannot be deleted');
   assertCanDelegate(actor, role.permissions);
   if (role.userCount > 0) throw conflict(`Role is assigned to ${role.userCount} user(s) — unassign it first`);
   db.prepare('DELETE FROM roles WHERE id = ?').run(id);
@@ -109,6 +111,6 @@ export function deleteRole(actor: Principal, id: string, ctx: AuditContext): voi
 function setPermissions(roleId: string, permissions: Permission[]): void {
   if (new Set(permissions).size !== permissions.length) throw badRequest('Duplicate permissions');
   db.prepare('DELETE FROM role_permissions WHERE role_id = ?').run(roleId);
-  const add = db.prepare('INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)');
+  const add = db.prepare('INSERT INTO role_permissions (role_id, permission_id) SELECT ?, id FROM permissions WHERE name = ?');
   for (const p of permissions) add.run(roleId, p);
 }

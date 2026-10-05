@@ -22,12 +22,12 @@ export interface Role {
   id: string;
   name: string;
   description: string;
+  /** Seeded from code: cannot be renamed or deleted, but its permissions can be edited. */
   isSystem: boolean;
+  /** Fully read-only (super_admin always holds every permission). */
+  locked: boolean;
   userCount: number;
-  /** Directly assigned permissions. */
   permissions: Permission[];
-  /** Everything the role grants, with implications (e.g. write ⇒ update) expanded by the server. */
-  effectivePermissions: Permission[];
   createdAt: number;
   updatedAt: number;
 }
@@ -36,10 +36,6 @@ export interface PermissionInfo {
   name: Permission;
   action: string;
   description: string;
-  /** Permissions this one directly implies. */
-  implies: Permission[];
-  /** Everything this permission grants, transitively. */
-  grants: Permission[];
 }
 
 /** Server-defined catalog, grouped by resource. */
